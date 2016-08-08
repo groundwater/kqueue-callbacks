@@ -20,9 +20,14 @@ struct Event {
 using FN = std::function<void(struct kevent&)>;
 
 class EventHandle {
+private:
     friend class EventLoop;
     FN* func;
     EventHandle(FN* n): func{n} {}
+public:
+    void clear() {
+        delete func;
+    }
 };
 
 class EventLoop {
@@ -32,10 +37,15 @@ public:
     EventLoop(int q): queue {q} {}
     EventLoop(): EventLoop(kqueue()) {}
 
-    EventHandle handle(Event event, std::function<void(struct kevent& e)> fn) {
+    EventHandle handle(Event event, FN fn) {
         
-        // this leaks, nothing ever removes it atm
-        auto func = new std::function<void(struct kevent& e)>(fn);
+        // copy the lambda onto the heap
+        // we need to keep this around well after this stack unwinds
+        auto func = new FN(fn);
+
+        // The EventHandle is the way we can clean up after ourselves later.
+        // Be sure to call .clear() after the lambda finishes executing.
+        // Remember we support a lambda running 0-N times. 
         EventHandle eh(func);
 
         struct kevent e {
@@ -49,20 +59,22 @@ public:
         return eh;
     }
 
-    void handle(Event event) {
+    EventHandle handle(Event event) {
         struct kevent e {
             .ident = event.ident,
             .filter = event.filter,
             .flags = event.flags,
         };
         int n = kevent(queue, &e, 1, NULL, 0, NULL);
+
+        return EventHandle {nullptr};
     }
 
 
     void next() {
         struct kevent e;
         int n = kevent(queue, NULL, 0, &e, 1, NULL);
-        auto fn = static_cast<std::function<void(struct kevent& e)>*>(e.udata);
+        auto fn = static_cast<FN *>(e.udata);
 
         (*fn)(e);
     }
@@ -84,9 +96,9 @@ int main () {
         sockaddr_in cliaddr;
         socklen_t len;
         
-        int fd = ::accept(sockfd, (struct sockaddr*) &cliaddr, &len);
+        int fd = accept(sockfd, (struct sockaddr*) &cliaddr, &len);
 
-        EventHandle read_handle = el.handle(Event(fd, EV_ADD|EV_ENABLE, EVFILT_READ), [=, &el](struct kevent& e){
+        EventHandle read_handle = el.handle(Event(fd, EV_ADD|EV_ENABLE, EVFILT_READ), [=, &el, &read_handle](struct kevent& e){
             const int N = (int) e.data;
             char* buff = new char[N + 1];
             
@@ -98,6 +110,7 @@ int main () {
 
             if (e.flags & EV_EOF) {
                 el.handle(Event(fd, EV_DELETE, EVFILT_READ));
+                read_handle.clear();
             }
 
             delete[] buff;
