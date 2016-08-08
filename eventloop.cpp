@@ -6,6 +6,7 @@
 #import <sys/types.h>
 #import <unistd.h>
 #import <vector>
+#import <cassert>
 
 class Socket {};
 
@@ -54,7 +55,11 @@ public:
             .flags = event.flags,
             .udata = func,
         };
+
+        // if you only want to set a new listener, set arg 3/4 to (NULL, 0) respectively
+        // n should always be 0
         int n = kevent(queue, &e, 1, NULL, 0, NULL);
+        assert(n == 0);
 
         return eh;
     }
@@ -92,22 +97,35 @@ int main () {
     
     EventLoop el;
 
+    // being callbacks!
     EventHandle listen_handle = el.handle(Event(sockfd, EV_ADD|EV_ENABLE, EVFILT_READ), [=, &el](struct kevent& e){
+        // this callback runs when accept() is ready to not block 
+
         sockaddr_in cliaddr;
         socklen_t len;
         
+        // should not block
         int fd = accept(sockfd, (struct sockaddr*) &cliaddr, &len);
 
         EventHandle read_handle = el.handle(Event(fd, EV_ADD|EV_ENABLE, EVFILT_READ), [=, &el, &read_handle](struct kevent& e){
+            // this callback runs when read() is ready to not block
+
+            // the .data property holds the number of bytes to be read 
             const int N = (int) e.data;
+
             char* buff = new char[N + 1];
-            
             buff[N] = '\0';
             
+            // read only the bytes ready to be read
+            // assert( n == N )
             int n = read(fd, buff, N);
+            assert(n == N);
 
+            // just dump everything to stdout atm
             std::cout << std::string(buff);
 
+            // if the socket is closed, the EV_EOF flag will be set
+            // we should remove the kqueue listener, and delete the associated closure
             if (e.flags & EV_EOF) {
                 el.handle(Event(fd, EV_DELETE, EVFILT_READ));
                 read_handle.clear();
