@@ -8,38 +8,31 @@
 #import <vector>
 #import <cassert>
 
-template<class T>
-using PT = std::shared_ptr<T>;
-
 // forward declarations
 class Event;
 class EventHandle;
+class EventLoop;
 
-using FN = std::function<void(struct kevent&, EventHandle * eh)>;
+// type aliases
+using FN = std::function<void(struct kevent&, EventHandle *)>;
 
+// headers
 class EventLoop {
 friend class EventHandle;
 private:
     int queue;
 public:
-    int queueSize = -100;
-    EventLoop(int q): queue {q}, queueSize {0} {
-        std::cout << "Creating EventLoop" << std::endl;
-    }
-    
-    // delte copy constructor
-    EventLoop(const EventLoop& that) = delete;
-    EventLoop & operator=(const EventLoop&) = delete;
+    int queueSize;
+    EventLoop(int);
 
-    void handle(Event event, FN fn);
-    void handle(Event event);
+    void handle(Event, FN);
+    void handle(Event);
 
     bool next();
 };
 
 struct Event {
     Event(uintptr_t i, u_short ff, short f): ident{i}, filter{f}, flags{ff} {};
-
     uintptr_t ident;
     short filter;
     u_short flags;
@@ -49,21 +42,24 @@ class EventHandle {
 friend class EventLoop;
 private:
     EventLoop &eloop;
-    EventHandle(FN n, EventLoop& el): func{n}, eloop{el} {}
+    EventHandle(FN, EventLoop&);
 public:
     FN func;
-    void clear() {
-        std::cout << eloop.queueSize << std::endl;
-        std::cout << "decrement" << std::endl;
-        eloop.queueSize -= 1;
-        std::cout << eloop.queueSize << std::endl;
-        
-        delete this;
-    }
+    void clear();
 };
 
+// implementations
+
+EventHandle::EventHandle(FN n, EventLoop &el): func{n}, eloop{el} {}
+
+void EventHandle::clear()  {
+    eloop.queueSize -= 1;
+    delete this;
+}
+
+EventLoop::EventLoop(int q): queue {q}, queueSize {0} {}
+
 void EventLoop::handle(Event event, FN fn) {
-    std::cout << "increment" << std::endl;
     queueSize++;
     
     // The EventHandle is the way we can clean up after ourselves later.
@@ -96,8 +92,6 @@ void EventLoop::handle(Event event) {
 bool EventLoop::next() {
     assert(queueSize >= 0);
 
-    std::cout << queueSize << std::endl;
-
     struct kevent e;
     int n = kevent(queue, NULL, 0, &e, 1, NULL);
     auto el = static_cast<EventHandle *>(e.udata);
@@ -106,6 +100,8 @@ bool EventLoop::next() {
 
     return (queueSize > 0);
 }
+
+// runtime
 
 int main () {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -128,9 +124,9 @@ int main () {
         throw std::runtime_error("Socket Listen Failed");
     }
     
-    EventLoop el(kqueue());
+    EventLoop event_loop(kqueue());
 
-    el.handle(Event(sockfd, EV_ADD|EV_ENABLE, EVFILT_READ), [&sockfd, &el](struct kevent& e, EventHandle * listen_handle){
+    event_loop.handle(Event(sockfd, EV_ADD|EV_ENABLE, EVFILT_READ), [&sockfd, &event_loop](struct kevent& e, EventHandle * listen_handle){
         // this callback runs when accept() is ready to not block 
 
         sockaddr_in cliaddr = {};
@@ -139,7 +135,7 @@ int main () {
         // should not block
         int fd = accept(sockfd, (struct sockaddr*) &cliaddr, &len);
 
-        el.handle(Event(fd, EV_ADD|EV_ENABLE, EVFILT_READ), [sockfd, fd, &el, listen_handle](struct kevent& e, EventHandle * read_handle) {
+        event_loop.handle(Event(fd, EV_ADD|EV_ENABLE, EVFILT_READ), [sockfd, fd, &event_loop, listen_handle](struct kevent& e, EventHandle * read_handle) {
             // this callback runs when read() is ready to not block
 
             // the .data property holds the number of bytes to be read 
@@ -158,7 +154,7 @@ int main () {
 
             if (s.find("quit") == 0) {
                 std::cout << "quitting" << std::endl;
-                el.handle(Event(sockfd, EV_DELETE, EVFILT_READ));
+                event_loop.handle(Event(sockfd, EV_DELETE, EVFILT_READ));
                 listen_handle->clear();
             }
 
@@ -166,7 +162,7 @@ int main () {
             // we should remove the kqueue listener, and delete the associated closure
             if (e.flags & EV_EOF) {
                 std::cout << "socket close" << std::endl;
-                el.handle(Event(fd, EV_DELETE, EVFILT_READ));
+                event_loop.handle(Event(fd, EV_DELETE, EVFILT_READ));
                 read_handle->clear();
             }
 
@@ -174,7 +170,7 @@ int main () {
         });
     });
 
-    while(bool c = el.next()) {
+    while(bool c = event_loop.next()) {
         //
     }
 
