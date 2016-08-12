@@ -184,11 +184,11 @@ int main () {
         };
 
         if (bind(*sockfd, (struct sockaddr*) &in, sizeof(in)) == -1) {
-            throw std::runtime_error("Socket Binding Failed");
+            throw std::runtime_error(strerror(errno));
         }
 
         if (listen(*sockfd, 10) == -1) {
-            throw std::runtime_error("Socket Listen Failed");
+            throw std::runtime_error(strerror(errno));
         }
 
         loop->watch(EventCapture(*sockfd, EV_ADD, EVFILT_READ), [=](struct kevent& event){
