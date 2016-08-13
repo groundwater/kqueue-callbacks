@@ -211,6 +211,13 @@ int main () {
                         delete (Thunk<struct kevent&>*) event.udata;
                         delete (Thunk<struct kevent&>*) sockPtr;
                     }
+                    else {
+                        int N = event.data;
+                        char* input = new char[N]; 
+                        read(conn, input, N);
+                        std::cout << input;
+                        delete[] input;
+                    }
                 }
             );
         });
