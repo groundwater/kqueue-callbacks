@@ -5,6 +5,7 @@
 #import <sys/socket.h>
 #import <sys/time.h>
 #import <sys/types.h>
+#import <sstream>
 #import <unistd.h>
 #import <vector>
 #import <cassert>
@@ -194,28 +195,46 @@ int main () {
         loop->watch(EventCapture(*sockfd, EV_ADD, EVFILT_READ), [=](struct kevent& event){
             sockaddr_in client = {};
             socklen_t len;
+            auto request = new std::string;
             
             // should not block
             int conn = accept(*sockfd, (struct sockaddr *) &client, &len);
             auto sockPtr = static_cast<Thunk<struct kevent&>*>(event.udata);
 
             loop->watch(
-                EventCapture(conn, EV_ADD, EVFILT_READ), 
+                EventCapture(conn, EV_ADD, EVFILT_READ),
                 [=](struct kevent& event){
-                    if (event.flags & EV_EOF || event.flags & EV_ERROR) {
+                    int N = event.data;
+                    char* input = new char[N]; 
+                    read(conn, input, N);
+
+                    // lame attempt at buffering
+                    *request = *request + input;
+
+                    if (event.flags & EV_EOF || (request->find("\r\n\r\n") > 0)) {
                         loop->clear(EventCapture(conn, EV_DELETE, EVFILT_READ));
-                        shutdown(conn, SHUT_RDWR);
-                        close(conn);
+                        shutdown(conn, SHUT_RD);
 
                         // wonderful cleanup
-                        delete (Thunk<struct kevent&>*) event.udata;
-                        delete (Thunk<struct kevent&>*) sockPtr;
-                    }
-                    else {
-                        int N = event.data;
-                        char* input = new char[N]; 
-                        read(conn, input, N);
-                        std::cout << input;
+                        // delete (Thunk<struct kevent&>*) event.udata;
+                        // delete (Thunk<struct kevent&>*) sockPtr;
+
+                        std::cout << *request << std::endl;;
+
+                        // request is "done"
+                        loop->watch(EventCapture(conn, EV_ADD, EVFILT_WRITE), [=](struct kevent& event){
+                            int N = event.data;
+                            auto response = "HTTP/1.1 200 OK\r\nHost:localhost:8080\r\nContent-Length:12\r\n\r\nHello World!";
+                            
+                            assert(N > strlen(response) );
+
+                            write(conn, response, strlen(response));
+                            
+                            loop->clear(EventCapture(conn, EV_DELETE, EVFILT_WRITE));
+                            
+                            close(conn);
+                        });
+                        
                         delete[] input;
                     }
                 }
